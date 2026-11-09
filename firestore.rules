@@ -1,0 +1,124 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ==========================================
+    // Вспомогательные функции авторизации и ролей
+    // ==========================================
+
+    // Проверка, что пользователь авторизован
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Проверка, что пользователь обращается к своему собственному документу
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Получение данных текущего пользователя из коллекции users
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Проверка роли пользователя
+    function isRole(role) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        getUserData().role == role;
+    }
+
+    // Администратор
+    function isAdmin() {
+      return isRole('admin');
+    }
+
+    // Библиотекарь или администратор
+    function isLibrarian() {
+      return isAdmin() || isRole('librarian');
+    }
+
+    // ==========================================
+    // Коллекция config (системная конфигурация / инициализация)
+    // ==========================================
+    match /config/{docId} {
+      // Любой пользователь (даже неавторизованный) может проверить статус инициализации системы
+      allow read: if true;
+
+      // Первичная инициализация: разрешено создать config/system только один раз при пустой базе
+      allow create: if isAuthenticated() && !exists(/databases/$(database)/documents/config/system);
+
+      // Изменение/удаление только администратором
+      allow update, delete: if isAdmin();
+    }
+
+    // ==========================================
+    // Коллекция users (профили пользователей)
+    // ==========================================
+    match /users/{userId} {
+      // Чтение: пользователь видит свой профиль, библиотекарь/администратор видит всех
+      allow read: if isOwner(userId) || isLibrarian();
+
+      // Создание:
+      // 1. Первый админ (когда система ещё не инициализирована)
+      // 2. Администратор может создавать любые аккаунты
+      // 3. Библиотекарь может создавать только учеников и библиотекарей
+      allow create: if (
+        (isOwner(userId) && !exists(/databases/$(database)/documents/config/system) && request.resource.data.role == 'admin') ||
+        isAdmin() ||
+        (isLibrarian() && request.resource.data.role in ['student', 'librarian'])
+      )
+      && request.resource.data.uid == userId
+      && request.resource.data.username is string
+      && request.resource.data.fullName is string
+      && request.resource.data.role in ['admin', 'librarian', 'student']
+      && request.resource.data.history is list;
+
+      // Обновление (выдача и возврат книг в массив history):
+      // Только библиотекарь и администратор могут менять историю выдач и данные пользователей
+      allow update: if isLibrarian()
+                    && request.resource.data.uid == resource.data.uid;
+
+      // Удаление профиля: только администратор
+      allow delete: if isAdmin();
+    }
+
+    // ==========================================
+    // Коллекция books (каталог книг)
+    // ==========================================
+    match /books/{bookId} {
+      // Чтение каталога: доступно любому авторизованному пользователю (ученикам, библиотекарям, админам)
+      allow read: if isAuthenticated();
+
+      // Добавление новой книги: только библиотекарь или администратор с валидацией полей
+      allow create: if isLibrarian()
+                    && request.resource.data.bookId is string
+                    && request.resource.data.title is string
+                    && request.resource.data.author is string
+                    && request.resource.data.category is string
+                    && request.resource.data.totalCopies is number
+                    && request.resource.data.availableCopies is number
+                    && request.resource.data.totalCopies >= 0
+                    && request.resource.data.availableCopies >= 0
+                    && request.resource.data.availableCopies <= request.resource.data.totalCopies;
+
+      // Обновление книги (изменение количества при выдаче/возврате): только библиотекарь/администратор
+      allow update: if isLibrarian()
+                    && request.resource.data.totalCopies is number
+                    && request.resource.data.availableCopies is number
+                    && request.resource.data.availableCopies >= 0
+                    && request.resource.data.availableCopies <= request.resource.data.totalCopies;
+
+      // Удаление книги: только библиотекарь или администратор
+      allow delete: if isLibrarian();
+    }
+
+    // ==========================================
+    // Запрет доступа ко всем остальным путям по умолчанию
+    // ==========================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

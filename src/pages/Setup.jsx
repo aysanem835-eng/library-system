@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, collection, getDocs, deleteDoc } from 'firebase/firestore';
 import { db, firebaseConfig } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -54,6 +54,14 @@ export default function Setup() {
   const checkForUsers = async () => {
     setCheckingUsers(true);
     try {
+      // First check config/system
+      const configDoc = await getDoc(doc(db, 'config', 'system'));
+      if (configDoc.exists()) {
+        setHasUsers(true);
+        return;
+      }
+
+      // Fallback: check users collection
       const snapshot = await getDocs(collection(db, 'users'));
       const exists = !snapshot.empty;
       setHasUsers(exists);
@@ -132,6 +140,16 @@ export default function Setup() {
         class: 'Администратор',
         history: [],
       });
+
+      try {
+        await setDoc(doc(db, 'config', 'system'), {
+          initialized: true,
+          adminUid: uid,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.warn('Config initialization error:', err);
+      }
 
       setAdminMessage({
         type: 'success',
