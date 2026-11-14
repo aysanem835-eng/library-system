@@ -1,0 +1,74 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data
+        : (exists(/databases/$(database)/documents/librarians/$(request.auth.uid))
+            ? get(/databases/$(database)/documents/librarians/$(request.auth.uid)).data
+            : {});
+    }
+
+    function isRole(role) {
+      return isAuthenticated() && getUserData().get('role', '') == role;
+    }
+
+    function isAdmin() {
+      return isRole('admin');
+    }
+
+    function isLibrarian() {
+      return isAdmin() || isRole('librarian');
+    }
+
+    match /config/{docId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && !exists(/databases/$(database)/documents/config/system);
+      allow update, delete: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isLibrarian();
+      allow create: if (
+        (isOwner(userId) && !exists(/databases/$(database)/documents/config/system)) ||
+        isAdmin() ||
+        (isLibrarian() && request.resource.data.role in ['student', 'librarian'])
+      );
+      allow update: if isLibrarian();
+      allow delete: if isAdmin();
+    }
+
+    match /librarians/{userId} {
+      allow read: if isLibrarian();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /students_directory/{studentId} {
+      allow read: if isLibrarian();
+      allow create, update, delete: if isAdmin() || isLibrarian();
+    }
+
+    match /loans/{loanId} {
+      allow read, create, update, delete: if isLibrarian();
+    }
+
+    match /books/{bookId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isLibrarian();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
