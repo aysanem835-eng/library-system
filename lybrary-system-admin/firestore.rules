@@ -3,6 +3,10 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ==========================================
+    // Вспомогательные функции
+    // ==========================================
+
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -12,6 +16,7 @@ service cloud.firestore {
     }
 
     function getUserData() {
+      // Сначала ищем в users, потом в librarians
       return exists(/databases/$(database)/documents/users/$(request.auth.uid))
         ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data
         : (exists(/databases/$(database)/documents/librarians/$(request.auth.uid))
@@ -19,54 +24,82 @@ service cloud.firestore {
             : {});
     }
 
-    function isRole(role) {
-      return isAuthenticated() && getUserData().get('role', '') == role;
+    function getRole() {
+      return isAuthenticated() ? getUserData().get('role', '') : '';
     }
 
     function isAdmin() {
-      return isRole('admin');
+      return getRole() == 'admin';
     }
 
     function isLibrarian() {
-      return isAdmin() || isRole('librarian');
+      return isAdmin() || getRole() == 'librarian';
     }
 
+    // ==========================================
+    // config — проверка первичной инициализации
+    // ==========================================
     match /config/{docId} {
+      // Читать config/system может ЛЮБОЙ (в т.ч. неавторизованный) —
+      // нужно для экрана первичной настройки
       allow read: if true;
-      allow create: if isAuthenticated() && !exists(/databases/$(database)/documents/config/system);
+      // Создать config/system может только первый неавторизованный запрос
+      // (когда системы ещё нет) ИЛИ авторизованный пользователь
+      allow create: if !exists(/databases/$(database)/documents/config/system)
+                    || isAuthenticated();
       allow update, delete: if isAdmin();
     }
 
+    // ==========================================
+    // users
+    // ==========================================
     match /users/{userId} {
       allow read: if isOwner(userId) || isLibrarian();
+
+      // Создание: первичная настройка (нет config/system) ИЛИ admin/librarian
       allow create: if (
-        (isOwner(userId) && !exists(/databases/$(database)/documents/config/system)) ||
-        isAdmin() ||
-        (isLibrarian() && request.resource.data.role in ['student', 'librarian'])
+        !exists(/databases/$(database)/documents/config/system)
+        || isAdmin()
+        || (isLibrarian() && request.resource.data.get('role', '') in ['student', 'librarian'])
       );
-      allow update: if isLibrarian();
+      allow update: if isOwner(userId) || isLibrarian();
       allow delete: if isAdmin();
     }
 
+    // ==========================================
+    // librarians
+    // ==========================================
     match /librarians/{userId} {
       allow read: if isLibrarian();
       allow create, update, delete: if isAdmin();
     }
 
+    // ==========================================
+    // students_directory
+    // ==========================================
     match /students_directory/{studentId} {
       allow read: if isLibrarian();
       allow create, update, delete: if isAdmin() || isLibrarian();
     }
 
+    // ==========================================
+    // loans
+    // ==========================================
     match /loans/{loanId} {
       allow read, create, update, delete: if isLibrarian();
     }
 
+    // ==========================================
+    // books
+    // ==========================================
     match /books/{bookId} {
       allow read: if isAuthenticated();
       allow create, update, delete: if isLibrarian();
     }
 
+    // ==========================================
+    // Всё остальное — запрещено
+    // ==========================================
     match /{document=**} {
       allow read, write: if false;
     }
