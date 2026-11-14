@@ -11,7 +11,7 @@ import {
   UserPlus,
   Loader2
 } from 'lucide-react';
-import { doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth, db } from '../firebase/config';
 
@@ -36,15 +36,16 @@ export default function Login() {
 
   const checkSystemInit = async () => {
     try {
+      // Only read config/system (allow read: true in rules — no auth needed)
+      // Never read 'users' here — that requires auth and would throw permissions error
       const configDoc = await getDoc(doc(db, 'config', 'system'));
       if (!configDoc.exists()) {
-        const usersSnap = await getDocs(collection(db, 'users'));
-        if (usersSnap.empty) {
-          setIsFirstSetup(true);
-        }
+        // No config doc = system not initialized yet → show first-admin setup form
+        setIsFirstSetup(true);
       }
     } catch (e) {
       console.warn('System check error:', e);
+      // On any error (e.g. network), just show normal login
     } finally {
       setCheckingSystem(false);
     }

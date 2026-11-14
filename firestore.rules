@@ -4,7 +4,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ==========================================
-    // Вспомогательные функции авторизации и ролей
+    // Вспомогательные функции
     // ==========================================
 
     function isAuthenticated() {
@@ -16,6 +16,7 @@ service cloud.firestore {
     }
 
     function getUserData() {
+      // Сначала ищем в users, потом в librarians
       return exists(/databases/$(database)/documents/users/$(request.auth.uid))
         ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data
         : (exists(/databases/$(database)/documents/librarians/$(request.auth.uid))
@@ -23,67 +24,73 @@ service cloud.firestore {
             : {});
     }
 
-    function isRole(role) {
-      return isAuthenticated() && getUserData().get('role', '') == role;
+    function getRole() {
+      return isAuthenticated() ? getUserData().get('role', '') : '';
     }
 
     function isAdmin() {
-      return isRole('admin');
+      return getRole() == 'admin';
     }
 
     function isLibrarian() {
-      return isAdmin() || isRole('librarian');
+      return isAdmin() || getRole() == 'librarian';
     }
 
     // ==========================================
-    // Коллекция config (системная конфигурация / инициализация)
+    // config — проверка первичной инициализации
     // ==========================================
     match /config/{docId} {
+      // Читать config/system может ЛЮБОЙ (в т.ч. неавторизованный) —
+      // нужно для экрана первичной настройки
       allow read: if true;
-      allow create: if isAuthenticated() && !exists(/databases/$(database)/documents/config/system);
+      // Создать config/system может только первый неавторизованный запрос
+      // (когда системы ещё нет) ИЛИ авторизованный пользователь
+      allow create: if !exists(/databases/$(database)/documents/config/system)
+                    || isAuthenticated();
       allow update, delete: if isAdmin();
     }
 
     // ==========================================
-    // Коллекции users и librarians
+    // users
     // ==========================================
     match /users/{userId} {
       allow read: if isOwner(userId) || isLibrarian();
+
+      // Создание: первичная настройка (нет config/system) ИЛИ admin/librarian
       allow create: if (
-        (isOwner(userId) && !exists(/databases/$(database)/documents/config/system)) ||
-        isAdmin() ||
-        (isLibrarian() && request.resource.data.role in ['student', 'librarian'])
+        !exists(/databases/$(database)/documents/config/system)
+        || isAdmin()
+        || (isLibrarian() && request.resource.data.get('role', '') in ['student', 'librarian'])
       );
-      allow update: if isLibrarian();
+      allow update: if isOwner(userId) || isLibrarian();
       allow delete: if isAdmin();
     }
 
+    // ==========================================
+    // librarians
+    // ==========================================
     match /librarians/{userId} {
       allow read: if isLibrarian();
       allow create, update, delete: if isAdmin();
     }
 
     // ==========================================
-    // Коллекция students_directory (справочник учеников и классов)
+    // students_directory
     // ==========================================
     match /students_directory/{studentId} {
-      // Библиотекари и админы могут читать справочник для выбора при выдаче
       allow read: if isLibrarian();
-
-      // Управление справочником учеников (добавление, редактирование, массовый перевод)
       allow create, update, delete: if isAdmin() || isLibrarian();
     }
 
     // ==========================================
-    // Коллекция loans (журнал выдачи и возврата книг)
+    // loans
     // ==========================================
     match /loans/{loanId} {
-      // Библиотекари и администраторы имеют полный доступ к журналу выдачи
       allow read, create, update, delete: if isLibrarian();
     }
 
     // ==========================================
-    // Коллекция books (каталог книг)
+    // books
     // ==========================================
     match /books/{bookId} {
       allow read: if isAuthenticated();
@@ -91,7 +98,7 @@ service cloud.firestore {
     }
 
     // ==========================================
-    // Запрет доступа ко всем остальным путям по умолчанию
+    // Всё остальное — запрещено
     // ==========================================
     match /{document=**} {
       allow read, write: if false;
