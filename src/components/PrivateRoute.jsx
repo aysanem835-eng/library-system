@@ -16,8 +16,6 @@ export default function PrivateRoute({ children }) {
   if (!currentUser || !userData) {
     return <Navigate to="/login" replace />;
   }
-
-  // Only librarians and admins are allowed in the web librarian app
   const role = userData.role;
   if (role !== 'librarian' && role !== 'admin') {
     return (
